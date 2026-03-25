@@ -1,0 +1,27 @@
+GLFW_ICON ICON "galaxian-clone-2.ico"
+
+1 VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+	//BLOCK "080904E4" 	// English UK
+    BLOCK "040904E4"	// English US
+    BEGIN
+	  VALUE "CompanyName", "BerTobi"
+      VALUE "FileDescription", " | "
+      VALUE "FileVersion", "1.0"
+      VALUE "InternalName", "galaxian-clone-2"
+      VALUE "LegalCopyright", "(c) 2024 BerTobi"
+      //VALUE "OriginalFilename", "galaxian-clone-2.exe"
+      VALUE "", ""
+      VALUE "ProductVersion", "1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+	//VALUE "Translation", 0x809, 1252	// English UK
+    VALUE "Translation", 0x409, 1252	// English US
+  END
+END
