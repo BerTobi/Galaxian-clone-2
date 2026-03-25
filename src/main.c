@@ -115,8 +115,13 @@ void initializeGame(GameData* gameData)
 	}
 }
 
-void Update(GameData* gameData, int currentTick)
+void Update(GameData* gameData, int currentTick, Assets* assets)
 {
+	if (IsSoundPlaying(assets->battleTheme) == false)
+	{
+		PlaySound(assets->battleTheme);
+		SetSoundVolume(assets->battleTheme, 0.5f);
+	}
 	for (int i = 0; i < gameData->entityCount; i++)
 	{
 		gameData->entities[i].position.x += gameData->entities[i].velocity.x;
@@ -137,17 +142,18 @@ void Update(GameData* gameData, int currentTick)
 			{
 				if (gameData->entities[j].type == ENEMY && gameData->entities[j].state == ALIVE)
 				{
-					if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size, gameData->entities[j].position, gameData->entities[j].size))
+					if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size / 2.0f, gameData->entities[j].position, gameData->entities[j].size / 2.0f))
 					{
-						if (i != gameData->entityCount)
+						if (i != gameData->entityCount - 1)
 						{
-							gameData->entities[i] = gameData->entities[gameData->entityCount];
+							gameData->entities[i] = gameData->entities[gameData->entityCount - 1];
 						}
-						if (j == gameData->entityCount) j = i;
+						if (j == gameData->entityCount - 1) j = i;
 						gameData->entityCount--;
-						if (j != gameData->entityCount)
-							gameData->entities[j] = gameData->entities[gameData->entityCount];
+						if (j != gameData->entityCount - 1)
+							gameData->entities[j] = gameData->entities[gameData->entityCount - 1];
 						gameData->entityCount--;
+						PlaySound(assets->hitEnemy);
 						break;
 					}
 				}
@@ -169,9 +175,9 @@ void Draw(RenderTexture2D target, Configuration* config, GameData* gameData, Ass
 				break;
 			case ENEMY:
 				if (gameData->entities[i].data.enemy.type == BLUE_ENEMY)
-					DrawRectangle(gameData->entities[i].position.x, gameData->entities[i].position.y, gameData->entities[i].size - 1, gameData->entities[i].size - 1, BLUE);
+					DrawCircle(gameData->entities[i].position.x, gameData->entities[i].position.y, gameData->entities[i].size / 2, BLUE);
 				else
-					DrawRectangle(gameData->entities[i].position.x, gameData->entities[i].position.y, gameData->entities[i].size - 1, gameData->entities[i].size - 1, PURPLE);
+					DrawCircle(gameData->entities[i].position.x, gameData->entities[i].position.y, gameData->entities[i].size / 2, PURPLE);
 				break;
 			case PROJECTILE:
 				DrawRectangle(gameData->entities[i].position.x, gameData->entities[i].position.y, gameData->entities[i].size - 1, gameData->entities[i].size, YELLOW);
@@ -213,12 +219,16 @@ void shootProjectile(GameData* gameData, Entity* shooter)
 	gameData->entityCount++;
 }
 
-void HandleInput(GameData* gameData)
+void HandleInput(GameData* gameData, Assets* assets)
 {
 	if (IsKeyDown(KEY_LEFT)) gameData->entities[0].velocity = (Vector2){-1.0f, 0};
 	else if (IsKeyDown(KEY_RIGHT)) gameData->entities[0].velocity = (Vector2){ 1.0f, 0 };
 	else gameData->entities[0].velocity = (Vector2){ 0, 0 };
-	if (IsKeyPressed(KEY_LEFT_CONTROL)) shootProjectile(gameData, &gameData->entities[0]);
+	if (IsKeyPressed(KEY_LEFT_CONTROL))
+	{
+		shootProjectile(gameData, &gameData->entities[0]);
+		PlaySound(assets->playerShoot);
+	}
 }
 
 int main(void)
@@ -227,6 +237,7 @@ int main(void)
 	double lastTick = GetTime();
 	Configuration config = { 896, 1024 };
 	InitWindow(config.screenWidth, config.screenHeight, "Galaxian Clone");
+	InitAudioDevice();
 	SetTargetFPS(60);               
 
 	RenderTexture2D target = LoadRenderTexture(224, 256);
@@ -245,12 +256,12 @@ int main(void)
 
 	while (!WindowShouldClose())    
 	{
-		HandleInput(gameData);
+		HandleInput(gameData, assets);
 		if (GetTime() - lastTick >= 0.02)
 		{
 			currentTick++;
 			lastTick = GetTime();
-			Update(gameData, currentTick);
+			Update(gameData, currentTick, assets);
 		}
 		Draw(target, &config, gameData, assets);
 	}
