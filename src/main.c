@@ -119,6 +119,41 @@ typedef struct GameData
 	int powerupTicks;
 } GameData;
 
+void loadAnimations(Assets* assets)
+{
+	// Blue enemy movement
+	assets->blueEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
+	assets->blueEnemyMovement.frames[0] = (Rectangle){ 1, 34, 16, 16 };
+	assets->blueEnemyMovement.frames[1] = (Rectangle){ 18, 34, 16, 16 };
+	assets->blueEnemyMovement.frames[2] = (Rectangle){ 35, 34, 16, 16 };
+	assets->blueEnemyMovement = (Animation){ .frames = assets->blueEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
+
+	// Purple enemy movement
+	assets->purpleEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
+	assets->purpleEnemyMovement.frames[0] = (Rectangle){ 1, 17, 16, 16 };
+	assets->purpleEnemyMovement.frames[1] = (Rectangle){ 18, 17, 16, 16 };
+	assets->purpleEnemyMovement.frames[2] = (Rectangle){ 35, 17, 16, 16 };
+	assets->purpleEnemyMovement = (Animation){ .frames = assets->purpleEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
+
+
+	// Enemy death
+	assets->enemyDeath.frames = malloc(sizeof(Rectangle) * 4);
+	assets->enemyDeath.frames[0] = (Rectangle){ 61, 70, 16, 16 };
+	assets->enemyDeath.frames[1] = (Rectangle){ 78, 70, 16, 16 };
+	assets->enemyDeath.frames[2] = (Rectangle){ 95, 70, 16, 16 };
+	assets->enemyDeath.frames[3] = (Rectangle){ 112, 70, 16, 16 };
+	assets->enemyDeath = (Animation){ .frames = assets->enemyDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
+
+	// Player death
+	assets->playerDeath.frames = malloc(sizeof(Rectangle) * 4);
+	assets->playerDeath.frames[0] = (Rectangle){ 1, 87, 32, 32 };
+	assets->playerDeath.frames[1] = (Rectangle){ 34, 87, 32, 32 };
+	assets->playerDeath.frames[2] = (Rectangle){ 67, 87, 32, 32 };
+	assets->playerDeath.frames[3] = (Rectangle){ 100, 87, 32, 32 };
+	assets->playerDeath = (Animation){ .frames = assets->playerDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
+
+}
+
 void initializeGame(GameData* gameData, Assets* assets)
 {
 	gameData->entityCount = 0;
@@ -427,41 +462,6 @@ void HandleInput(GameData* gameData, Assets* assets)
 	else if (IsKeyDown(KEY_RIGHT)) gameData->entities[0].velocity = (Vector2){ 1.0f, 0 };
 	else gameData->entities[0].velocity = (Vector2){ 0, 0 };
 	if (IsKeyPressed(KEY_LEFT_CONTROL)) ShootProjectile(gameData, &gameData->entities[0], assets);
-
-}
-
-void loadAnimations(Assets* assets)
-{
-	// Blue enemy movement
-	assets->blueEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
-	assets->blueEnemyMovement.frames[0] = (Rectangle){ 1, 34, 16, 16 };
-	assets->blueEnemyMovement.frames[1] = (Rectangle){ 18, 34, 16, 16 };
-	assets->blueEnemyMovement.frames[2] = (Rectangle){ 35, 34, 16, 16 };
-	assets->blueEnemyMovement = (Animation){ .frames = assets->blueEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
-
-	// Purple enemy movement
-	assets->purpleEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
-	assets->purpleEnemyMovement.frames[0] = (Rectangle){ 1, 17, 16, 16 };
-	assets->purpleEnemyMovement.frames[1] = (Rectangle){ 18, 17, 16, 16 };
-	assets->purpleEnemyMovement.frames[2] = (Rectangle){ 35, 17, 16, 16 };
-	assets->purpleEnemyMovement = (Animation){ .frames = assets->purpleEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
-
-
-	// Enemy death
-	assets->enemyDeath.frames = malloc(sizeof(Rectangle) * 4);
-	assets->enemyDeath.frames[0] = (Rectangle){ 61, 70, 16, 16 };
-	assets->enemyDeath.frames[1] = (Rectangle){ 78, 70, 16, 16 };
-	assets->enemyDeath.frames[2] = (Rectangle){ 95, 70, 16, 16 };
-	assets->enemyDeath.frames[3] = (Rectangle){ 112, 70, 16, 16 };
-	assets->enemyDeath = (Animation){ .frames = assets->enemyDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
-
-	// Player death
-	assets->playerDeath.frames = malloc(sizeof(Rectangle) * 4);
-	assets->playerDeath.frames[0] = (Rectangle){ 1, 87, 32, 32 };
-	assets->playerDeath.frames[1] = (Rectangle){ 34, 87, 32, 32 };
-	assets->playerDeath.frames[2] = (Rectangle){ 67, 87, 32, 32 };
-	assets->playerDeath.frames[3] = (Rectangle){ 100, 87, 32, 32 };
-	assets->playerDeath = (Animation){ .frames = assets->playerDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
 
 }
 
