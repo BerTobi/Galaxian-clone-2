@@ -119,8 +119,21 @@ typedef struct GameData
 	int powerupTicks;
 } GameData;
 
-void loadAnimations(Assets* assets)
+void loadAssets(Assets* assets)
 {
+	assets->playerShoot = LoadSound("res/Shoot.mp3");
+	assets->fighterLoss = LoadSound("res/Fighter Loss.mp3");
+	assets->hitEnemy = LoadSound("res/Hit Enemy.mp3");
+	assets->battleTheme = LoadSound("res/Battle Theme.mp3");
+
+	Image spritesheetImage = LoadImage("res/Spritesheet.png");
+	ImageFormat(&spritesheetImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	ImageColorReplace(&spritesheetImage, BLACK, (Color) { 0, 0, 0, 0 });
+	assets->spriteSheet = LoadTextureFromImage(spritesheetImage);
+	UnloadImage(spritesheetImage);
+	SetTextureFilter(assets->spriteSheet, TEXTURE_FILTER_POINT);
+
+	// Animations
 	// Blue enemy movement
 	assets->blueEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
 	assets->blueEnemyMovement.frames[0] = (Rectangle){ 1, 34, 16, 16 };
@@ -488,19 +501,7 @@ int main(void)
 	Assets* assets = malloc(sizeof(Assets));
 	assert(gameData != NULL && assets != NULL);
 
-	assets->playerShoot = LoadSound("res/Shoot.mp3");
-	assets->fighterLoss = LoadSound("res/Fighter Loss.mp3");
-	assets->hitEnemy = LoadSound("res/Hit Enemy.mp3");
-	assets->battleTheme = LoadSound("res/Battle Theme.mp3");
-
-	Image spritesheetImage = LoadImage("res/Spritesheet.png");
-	ImageFormat(&spritesheetImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	ImageColorReplace(&spritesheetImage, BLACK, (Color) { 0, 0, 0, 0 });
-	assets->spriteSheet = LoadTextureFromImage(spritesheetImage);
-	UnloadImage(spritesheetImage);
-	SetTextureFilter(assets->spriteSheet, TEXTURE_FILTER_POINT);
-
-	loadAnimations(assets);
+	loadAssets(assets);
 
 	initializeGame(gameData, assets);
 
