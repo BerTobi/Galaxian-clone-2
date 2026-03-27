@@ -13,6 +13,21 @@
 #define BASE_BLUE_ENEMY_SPRITE (Rectangle){1, 34, 16, 16}
 #define BASE_PURPLE_ENEMY_SPRITE (Rectangle){1, 17, 16, 16}
 
+#define SPRITE_TO_HITBOX_SCALE 0.4f
+#define GAME_WIDTH 224
+#define GAME_HEIGHT 256
+#define GAME_SCALE_FACTOR 4.0f
+
+#define BLUE_ENEMY_SCORE 20
+#define PURPLE_ENEMY_SCORE 40
+#define DIVING_CHANCE 2
+#define BLUE_ENEMY_SHOOT_CHANCE 20
+#define PURPLE_ENEMY_SHOOT_CHANCE 30
+#define ENEMY_TICKS_PER_DIRECTION 400
+
+#define TICK_DURATION 0.01 //In seconds
+#define POWERUP_DURATION 600
+
 typedef struct Animation
 {
 	Rectangle* frames;
@@ -119,6 +134,14 @@ typedef struct GameData
 	int powerupTicks;
 } GameData;
 
+void loadFrames(Rectangle* frames, int frameCount, Rectangle baseFrame, int spacing)
+{
+	for (int i = 0; i < frameCount; i++)
+	{
+		frames[i] = (Rectangle){ baseFrame.x + i * (baseFrame.width + spacing), baseFrame.y, baseFrame.width, baseFrame.height };
+	}
+}
+
 void loadAssets(Assets* assets)
 {
 	assets->playerShoot = LoadSound("res/Shoot.mp3");
@@ -136,33 +159,27 @@ void loadAssets(Assets* assets)
 	// Animations
 	// Blue enemy movement
 	assets->blueEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
-	assets->blueEnemyMovement.frames[0] = (Rectangle){ 1, 34, 16, 16 };
-	assets->blueEnemyMovement.frames[1] = (Rectangle){ 18, 34, 16, 16 };
-	assets->blueEnemyMovement.frames[2] = (Rectangle){ 35, 34, 16, 16 };
+	assert(assets->blueEnemyMovement.frames != NULL);
+	loadFrames(assets->blueEnemyMovement.frames, 3, BASE_BLUE_ENEMY_SPRITE, 1);
 	assets->blueEnemyMovement = (Animation){ .frames = assets->blueEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
 
 	// Purple enemy movement
 	assets->purpleEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
-	assets->purpleEnemyMovement.frames[0] = (Rectangle){ 1, 17, 16, 16 };
-	assets->purpleEnemyMovement.frames[1] = (Rectangle){ 18, 17, 16, 16 };
-	assets->purpleEnemyMovement.frames[2] = (Rectangle){ 35, 17, 16, 16 };
+	assert(assets->purpleEnemyMovement.frames != NULL);
+	loadFrames(assets->purpleEnemyMovement.frames, 3, BASE_PURPLE_ENEMY_SPRITE, 1);
 	assets->purpleEnemyMovement = (Animation){ .frames = assets->purpleEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
 
 
 	// Enemy death
 	assets->enemyDeath.frames = malloc(sizeof(Rectangle) * 4);
-	assets->enemyDeath.frames[0] = (Rectangle){ 61, 70, 16, 16 };
-	assets->enemyDeath.frames[1] = (Rectangle){ 78, 70, 16, 16 };
-	assets->enemyDeath.frames[2] = (Rectangle){ 95, 70, 16, 16 };
-	assets->enemyDeath.frames[3] = (Rectangle){ 112, 70, 16, 16 };
+	assert(assets->enemyDeath.frames != NULL);
+	loadFrames(assets->enemyDeath.frames, 4, (Rectangle) { 61, 70, 16, 16 }, 1);	
 	assets->enemyDeath = (Animation){ .frames = assets->enemyDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
 
 	// Player death
 	assets->playerDeath.frames = malloc(sizeof(Rectangle) * 4);
-	assets->playerDeath.frames[0] = (Rectangle){ 1, 87, 32, 32 };
-	assets->playerDeath.frames[1] = (Rectangle){ 34, 87, 32, 32 };
-	assets->playerDeath.frames[2] = (Rectangle){ 67, 87, 32, 32 };
-	assets->playerDeath.frames[3] = (Rectangle){ 100, 87, 32, 32 };
+	assert(assets->playerDeath.frames != NULL);
+	loadFrames(assets->playerDeath.frames, 4, (Rectangle) { 1, 87, 32, 32 }, 1);
 	assets->playerDeath = (Animation){ .frames = assets->playerDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
 
 }
@@ -236,7 +253,7 @@ void KillEntity(GameData* gameData, int index)
 	else gameData->entityCount--;
 }
 
-void gameOverScreen(GameData* gameData)
+void GameOverScreen(GameData* gameData)
 {
 	BeginDrawing();
 	DrawText("GAME OVER", gameData->config.screenWidth / 2 - MeasureText("GAME OVER", 60) / 2, gameData->config.screenHeight / 2 - 30, 60, WHITE);
@@ -272,7 +289,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 			{
 				if (gameData->entities[i].data.enemy.behaviour == IN_FORMATION)
 				{
-					if (currentTick % 400 == 0)
+					if (currentTick % ENEMY_TICKS_PER_DIRECTION == 0)
 					{
 						gameData->entities[i].velocity.x *= -1.0f;
 					}
@@ -281,7 +298,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 					{
 						int divingChance = rand() % 10000;
 
-						if (divingChance < 2)
+						if (divingChance < DIVING_CHANCE)
 						{
 							gameData->entities[i].data.enemy.behaviour = DIVING;
 							gameData->entities[i].data.enemy.diveStartTick = currentTick;
@@ -293,11 +310,11 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 				if (gameData->entities[i].data.enemy.behaviour == DIVING)
 				{
 					int shootChance = rand() % 10000;
-					float t = (currentTick - gameData->entities[i].data.enemy.diveStartTick) / 50.0f;
+					float t = (currentTick - gameData->entities[i].data.enemy.diveStartTick) * (TICK_DURATION * 2);
 					if (gameData->entities[i].data.enemy.type == BLUE_ENEMY)
 					{
 						gameData->entities[i].velocity = (Vector2){ cosf(t) * 1.5f, sinf(t * 0.5f) * 0.5f };
-						if (shootChance < 20)
+						if (shootChance < BLUE_ENEMY_SHOOT_CHANCE)
 						{
 							ShootProjectile(gameData, &gameData->entities[i], assets);
 						}
@@ -305,7 +322,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 					else if (gameData->entities[i].data.enemy.type == PURPLE_ENEMY)
 					{
 						gameData->entities[i].velocity = (Vector2){ cosf(t) * 3.5f, sinf(t * 0.7f) * 0.7f };
-						if (shootChance < 30)
+						if (shootChance < PURPLE_ENEMY_SHOOT_CHANCE)
 						{
 							ShootProjectile(gameData, &gameData->entities[i], assets);
 						}
@@ -341,7 +358,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 			{
 				if (gameData->entities[j].type == ENEMY && gameData->entities[j].state == ALIVE)
 				{
-					if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size / 2.5f, gameData->entities[j].position, gameData->entities[j].size / 2.5f))
+					if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size * SPRITE_TO_HITBOX_SCALE, gameData->entities[j].position, gameData->entities[j].size * SPRITE_TO_HITBOX_SCALE))
 					{
 						if (gameData->entities[j].data.enemy.behaviour == DIVING)
 						{
@@ -349,12 +366,12 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 						}
 						if (gameData->entities[j].data.enemy.type == PURPLE_ENEMY)
 						{
-							gameData->score += 40;
-							gameData->powerupTicks += 500;
+							gameData->score += PURPLE_ENEMY_SCORE;
+							gameData->powerupTicks += POWERUP_DURATION;
 						}
 						else
 						{
-							gameData->score += 20;
+							gameData->score += BLUE_ENEMY_SCORE;
 						}
 						if (j == gameData->entityCount - 1) j = i;
 						KillEntity(gameData, i);
@@ -390,7 +407,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 				{
 					if ((gameData->entities[j].type == PROJECTILE && gameData->entities[j].data.projectile.type == ENEMY_BULLET) || (gameData->entities[j].type == ENEMY && gameData->entities[j].state == ALIVE))
 					{
-						if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size / 2.5f, gameData->entities[j].position, gameData->entities[j].size / 2.5f))
+						if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size * SPRITE_TO_HITBOX_SCALE, gameData->entities[j].position, gameData->entities[j].size * SPRITE_TO_HITBOX_SCALE))
 						{
 							PlaySound(assets->fighterLoss);
 							gameData->entities[i].state = DYING;
@@ -409,7 +426,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 				}
 				if (gameData->entities[i].data.player.deathAnimation.currentFrame >= gameData->entities[i].data.player.deathAnimation.frameCount)
 				{
-					gameOverScreen(gameData);
+					GameOverScreen(gameData);
 					initializeGame(gameData, assets);
 				}
 			}
@@ -460,7 +477,7 @@ void Draw(RenderTexture2D target, GameData* gameData, Assets* assets)
 	BeginDrawing();
 	ClearBackground(BLACK);
 	DrawTexturePro(target.texture, 
-		(Rectangle) {0, 0, 224.0f, -256.0f}, 
+		(Rectangle) {0, 0, GAME_WIDTH, -GAME_HEIGHT}, 
 		(Rectangle) {0, 0, (float)gameData->config.screenWidth, (float)gameData->config.screenHeight},
 		(Vector2) {0, 0}, 
 		0.0f,
@@ -487,15 +504,15 @@ void CleanUp(GameData* gameData, Assets* assets)
 int main(void)
 {
 	srand(time(NULL));
-	int currentTick = 200;
+	int currentTick = ENEMY_TICKS_PER_DIRECTION / 2;
 	double lastTick = GetTime();
 	GameData* gameData = malloc(sizeof(GameData));
-	gameData->config = (Configuration){ .screenWidth = 896, .screenHeight = 1024 };
+	gameData->config = (Configuration){ .screenWidth = GAME_WIDTH * GAME_SCALE_FACTOR, .screenHeight = GAME_HEIGHT * GAME_SCALE_FACTOR };
 	InitWindow(gameData->config.screenWidth, gameData->config.screenHeight, "Galaxian Clone");
 	InitAudioDevice();
 	SetTargetFPS(60);               
 
-	RenderTexture2D target = LoadRenderTexture(224, 256);
+	RenderTexture2D target = LoadRenderTexture(GAME_WIDTH, GAME_HEIGHT);
 	SetTextureFilter(target.texture, TEXTURE_FILTER_POINT);
 
 	Assets* assets = malloc(sizeof(Assets));
@@ -508,7 +525,7 @@ int main(void)
 	while (!WindowShouldClose())    
 	{
 		HandleInput(gameData, assets);
-		if (GetTime() - lastTick >= 0.01)
+		if (GetTime() - lastTick >= TICK_DURATION)
 		{
 			currentTick++;
 			lastTick = GetTime();
