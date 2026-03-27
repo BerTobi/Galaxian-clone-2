@@ -25,6 +25,10 @@
 #define PURPLE_ENEMY_SHOOT_CHANCE 30
 #define ENEMY_TICKS_PER_DIRECTION 400
 
+#define MAX_DIVING_ENEMIES 5
+#define MAX_PLAYER_PROJECTILES 1
+#define MAX_POWERUP_PROJECTILES 2
+
 #define TICK_DURATION 0.01 //In seconds
 #define POWERUP_DURATION 600
 
@@ -188,10 +192,10 @@ void initializeGame(GameData* gameData, Assets* assets)
 {
 	gameData->entityCount = 0;
 	gameData->score = 0;
-	gameData->maxPlayerProjectiles = 1;
+	gameData->maxPlayerProjectiles = MAX_PLAYER_PROJECTILES;
 	gameData->currentPlayerProjectiles = 0;
 	gameData->currentDivingEnemies = 0;
-	gameData->maxDivingEnemies = 5;
+	gameData->maxDivingEnemies = MAX_DIVING_ENEMIES;
 	gameData->powerupTicks = 0;
 	for (int i = 0; i < MAX_ENTITIES; i++)
 	{
@@ -271,7 +275,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 	}
 	if (gameData->powerupTicks > 0) 	
 	{
-		gameData->maxPlayerProjectiles = 2;
+		gameData->maxPlayerProjectiles = MAX_POWERUP_PROJECTILES;
 		gameData->powerupTicks--;
 	}
 	else
