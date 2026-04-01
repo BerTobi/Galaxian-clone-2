@@ -1,9 +1,20 @@
-#include "raylib.h"
+#define WIN32_LEAN_AND_MEAN
+#define NOGDI
+#define NOUSER
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#pragma comment(lib, "ws2_32.lib")
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
 #include <time.h>
 #include <math.h>
+
+#include "raylib.h"
+
+
 
 #define MAX_ENTITIES 1000
 #define NONE -1
@@ -136,6 +147,7 @@ typedef struct GameData
 	int maxDivingEnemies;
 	int currentDivingEnemies;
 	int powerupTicks;
+	SOCKET netSocket;
 } GameData;
 
 void loadFrames(Rectangle* frames, int frameCount, Rectangle baseFrame, int spacing)
@@ -268,6 +280,23 @@ void GameOverScreen(GameData* gameData)
 
 void Update(GameData* gameData, int currentTick, Assets* assets)
 {
+	// At the top of Update()
+	if (gameData->netSocket != INVALID_SOCKET) {
+		// Send current score
+		char msg[64];
+		int len = snprintf(msg, sizeof(msg), "score:%d", gameData->score);
+		send(gameData->netSocket, msg, len, 0);
+
+		// Try to receive the echo (non-blocking — returns immediately if nothing there)
+		char buf[64];
+		int n = recv(gameData->netSocket, buf, sizeof(buf) - 1, 0);
+		if (n > 0) {
+			buf[n] = '\0';
+			printf("echo: %s\n", buf);
+		}
+		// WSAEWOULDBLOCK just means no data yet — that's fine, ignore it
+	}
+
 	if (IsSoundPlaying(assets->battleTheme) == false)
 	{
 		PlaySound(assets->battleTheme);
@@ -501,6 +530,9 @@ void HandleInput(GameData* gameData, Assets* assets)
 
 void CleanUp(GameData* gameData, Assets* assets)
 {
+	if (gameData->netSocket != INVALID_SOCKET)
+		closesocket(gameData->netSocket);
+	WSACleanup();
 	free(gameData);
 	free(assets);
 }
@@ -525,6 +557,28 @@ int main(void)
 	loadAssets(assets);
 
 	initializeGame(gameData, assets);
+
+	// Winsock initialization
+
+	WSADATA wsa;
+	WSAStartup(MAKEWORD(2, 2), &wsa);
+
+	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in addr = { 0 };
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(2112);
+	inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+	if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+		printf("connect failed: %d\n", WSAGetLastError());
+	}
+	else {
+		// Set non-blocking so recv never stalls the game loop
+		u_long mode = 1;
+		ioctlsocket(sock, FIONBIO, &mode);
+		printf("connected to echo server\n");
+	}
+	gameData->netSocket = sock;
 
 	while (!WindowShouldClose())    
 	{
