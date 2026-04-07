@@ -29,6 +29,8 @@
 #define BASE_BULLET_SPRITE (Rectangle){200, 97, 1, 2}
 #define BASE_BLUE_ENEMY_SPRITE (Rectangle){1, 34, 16, 16}
 #define BASE_PURPLE_ENEMY_SPRITE (Rectangle){1, 17, 16, 16}
+#define BASE_ENEMY_DEATH_SPRITE (Rectangle) { 61, 70, 16, 16 }
+#define BASE_PLAYER_DEATH_SPRITE (Rectangle) { 1, 87, 32, 32 }
 
 #define SPRITE_TO_HITBOX_SCALE 0.4f
 #define GAME_WIDTH 224
@@ -49,6 +51,11 @@
 #define TICK_DURATION 0.01f //In seconds
 #define POWERUP_DURATION 600
 
+#define PLAYER_BULLET_SPEED -2.0f
+#define ENEMY_BULLET_SPEED 2.0f
+
+#define DISCONNECT_TIMEOUT 5.0 //In seconds
+
 typedef enum NetworkMode
 {
 	HOST,
@@ -68,6 +75,7 @@ typedef enum GameState
 {
 	MAIN_MENU,
 	MULTIPLAYER_MENU,
+	IP_INPUT,
 	MULTIPLAYER_LOBBY,
 	IN_GAME,
 	GAME_OVER
@@ -75,9 +83,9 @@ typedef enum GameState
 
 typedef enum InputFlags
 {
-	INPUT_LEFT,
-	INPUT_RIGHT,
-	INPUT_SHOOT
+	INPUT_LEFT = (1 << 0),
+	INPUT_RIGHT = (1 << 1),
+	INPUT_SHOOT = (1 << 2)
 } InputFlags;
 
 typedef enum SoundFlags {
@@ -96,10 +104,10 @@ typedef struct InputPacket {
 } InputPacket;
 
 typedef struct StatePacket {
-	u8    type; // PacketType
-	int score;
+	u8    type; 
 	u8    entityCount;
 	u8    soundFlags;
+	int score;
 	struct {
 		float x, y;
 		u8    state;
@@ -123,6 +131,7 @@ typedef struct Assets
 	Sound fighterLoss;
 	Sound hitEnemy;
 	Sound battleTheme;
+	Sound gameOver;
 	Texture2D spriteSheet;
 	Animation blueEnemyMovement;
 	Animation purpleEnemyMovement;
@@ -158,9 +167,9 @@ typedef struct EnemyData
 {
 	enemyType type;
 	enemyBehaviour behaviour;
-	int diveStartTick;
 	Animation deathAnimation;
 	Animation movementAnimation;
+	int diveStartTick;
 } EnemyData;
 
 typedef union EntityData
@@ -196,9 +205,9 @@ typedef struct Entity
 	EntityState state;
 	Vector2 position;
 	Vector2 velocity;
-	int size;
 	EntityData data;
 	Rectangle baseSprite;
+	int size;
 } Entity;
 
 typedef struct NetworkInfo
@@ -207,6 +216,9 @@ typedef struct NetworkInfo
 	NetworkMode mode;
 	struct sockaddr_in clientAddr; 
 	int clientConnected;
+	double lastPacketTime;
+	char ip[16];
+	int ipLength;
 } NetworkInfo;
 
 typedef struct GameData
@@ -225,12 +237,17 @@ typedef struct GameData
 	u8 soundFlags;
 } GameData;
 
-void loadFrames(Rectangle* frames, int frameCount, Rectangle baseFrame, int spacing)
+// Initialization and loading
+
+void loadAnimation(Animation* animation, int frameCount, Rectangle baseFrame, int spacing, float ticksPerFrame)
 {
+	animation->frames = malloc(sizeof(Rectangle) * frameCount);
+	assert(animation->frames != NULL);
 	for (int i = 0; i < frameCount; i++)
 	{
-		frames[i] = (Rectangle){ baseFrame.x + i * (baseFrame.width + spacing), baseFrame.y, baseFrame.width, baseFrame.height };
+		animation->frames[i] = (Rectangle){ baseFrame.x + i * (baseFrame.width + spacing), baseFrame.y, baseFrame.width, baseFrame.height };
 	}
+	*animation = (Animation){ .frames = animation->frames, .frameCount = frameCount, .currentFrame = 0, .ticksPerFrame = ticksPerFrame, .lastFrameTick = 0 };;
 }
 
 void loadAssets(Assets* assets)
@@ -239,6 +256,7 @@ void loadAssets(Assets* assets)
 	assets->fighterLoss = LoadSound("res/Fighter Loss.mp3");
 	assets->hitEnemy = LoadSound("res/Hit Enemy.mp3");
 	assets->battleTheme = LoadSound("res/Battle Theme.mp3");
+	assets->gameOver = LoadSound("res/Game Over.mp3");
 
 	Image spritesheetImage = LoadImage("res/Spritesheet.png");
 	ImageFormat(&spritesheetImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
@@ -248,34 +266,14 @@ void loadAssets(Assets* assets)
 	SetTextureFilter(assets->spriteSheet, TEXTURE_FILTER_POINT);
 
 	// Animations
-	// Blue enemy movement
-	assets->blueEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
-	assert(assets->blueEnemyMovement.frames != NULL);
-	loadFrames(assets->blueEnemyMovement.frames, 3, BASE_BLUE_ENEMY_SPRITE, 1);
-	assets->blueEnemyMovement = (Animation){ .frames = assets->blueEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
-
-	// Purple enemy movement
-	assets->purpleEnemyMovement.frames = malloc(sizeof(Rectangle) * 3);
-	assert(assets->purpleEnemyMovement.frames != NULL);
-	loadFrames(assets->purpleEnemyMovement.frames, 3, BASE_PURPLE_ENEMY_SPRITE, 1);
-	assets->purpleEnemyMovement = (Animation){ .frames = assets->purpleEnemyMovement.frames, .frameCount = 3, .currentFrame = 0, .ticksPerFrame = 50, .lastFrameTick = 0 };
-
-
-	// Enemy death
-	assets->enemyDeath.frames = malloc(sizeof(Rectangle) * 4);
-	assert(assets->enemyDeath.frames != NULL);
-	loadFrames(assets->enemyDeath.frames, 4, (Rectangle) { 61, 70, 16, 16 }, 1);	
-	assets->enemyDeath = (Animation){ .frames = assets->enemyDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
-
-	// Player death
-	assets->playerDeath.frames = malloc(sizeof(Rectangle) * 4);
-	assert(assets->playerDeath.frames != NULL);
-	loadFrames(assets->playerDeath.frames, 4, (Rectangle) { 1, 87, 32, 32 }, 1);
-	assets->playerDeath = (Animation){ .frames = assets->playerDeath.frames, .frameCount = 4, .currentFrame = 0, .ticksPerFrame = 15, .lastFrameTick = 0 };
-
+	loadAnimation(&assets->blueEnemyMovement, 3, BASE_BLUE_ENEMY_SPRITE, 1, 50);
+	loadAnimation(&assets->purpleEnemyMovement, 3, BASE_PURPLE_ENEMY_SPRITE, 1, 50);
+	loadAnimation(&assets->enemyDeath, 4, BASE_ENEMY_DEATH_SPRITE, 1, 15);
+	loadAnimation(&assets->playerDeath, 4, BASE_PLAYER_DEATH_SPRITE, 1, 15);
+	
 }
 
-void initializeGameData(GameData* gameData, Assets* assets)
+void InitializeGameData(GameData* gameData, Assets* assets)
 {
 	// Close existing socket if any
 	if (gameData->network.socket != INVALID_SOCKET)
@@ -283,6 +281,8 @@ void initializeGameData(GameData* gameData, Assets* assets)
 		closesocket(gameData->network.socket);
 		WSACleanup();
 	}
+
+	if (IsSoundPlaying(assets->battleTheme)) StopSound(assets->battleTheme);
 
 	gameData->currentGamestate = MAIN_MENU;
 	gameData->entityCount = 0;
@@ -292,14 +292,19 @@ void initializeGameData(GameData* gameData, Assets* assets)
 	gameData->currentDivingEnemies = 0;
 	gameData->maxDivingEnemies = MAX_DIVING_ENEMIES;
 	gameData->powerupTicks = 0;
+	gameData->soundFlags = 0;
 	gameData->network.socket = INVALID_SOCKET;
 	gameData->network.clientConnected = 0;
-	gameData->soundFlags = 0;
+	gameData->network.lastPacketTime = 0;
+	gameData->network.ip[0] = '\0';
+	gameData->network.ipLength = 0;
 	
 }
 
 void startGame(GameData* gameData, Assets* assets)
 {
+	gameData->network.lastPacketTime = GetTime();
+
 	for (int i = 0; i < MAX_ENTITIES; i++)
 	{
 		gameData->entities[i] = (Entity){ .type = NONE, .position = {0, 0}, .velocity = {0, 0}, .size = 0 };
@@ -334,87 +339,24 @@ void startGame(GameData* gameData, Assets* assets)
 	}
 }
 
-void ClientInitialization(GameData* gameData)
+void SoundEffect(GameData* gameData, Assets* assets, SoundFlags flag)
 {
-	WSADATA wsa;
-	WSAStartup(MAKEWORD(2, 2), &wsa);
-
-	SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
-	struct sockaddr_in addr = { 0 };
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(2112);
-	inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-
-	if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-		printf("connect failed: %d\n", WSAGetLastError());
+	switch (flag)
+	{
+	case SND_PLAYER_SHOOT:
+		PlaySound(assets->playerShoot);
+		gameData->soundFlags |= SND_PLAYER_SHOOT;
+		break;
+	case SND_FIGHTER_LOSS:
+		PlaySound(assets->fighterLoss);
+		gameData->soundFlags |= SND_FIGHTER_LOSS;
+		break;
+	case SND_HIT_ENEMY:
+		PlaySound(assets->hitEnemy);
+		gameData->soundFlags |= SND_HIT_ENEMY;
+		break;
 	}
-	else {
-		// Set non-blocking so recv never stalls the game loop
-		u_long mode = 1;
-		ioctlsocket(sock, FIONBIO, &mode);
-		printf("UDP socket ready\n");
-	}
-	gameData->network.socket = sock;
-}
 
-void ServerInitialization(GameData* gameData)
-{
-	WSADATA wsa;
-	WSAStartup(MAKEWORD(2, 2), &wsa);
-	SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
-	struct sockaddr_in addr = { 0 };
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = htons(2112);
-	if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-		printf("bind failed: %d\n", WSAGetLastError());
-	}
-	else {
-		u_long mode = 1;
-		ioctlsocket(sock, FIONBIO, &mode);
-		printf("UDP echo server listening on port 2112...\n");
-	}
-	gameData->network.socket = sock;
-	gameData->network.clientConnected = 0;
-}
-
-void LobbyHandler(GameData* gameData, Assets* assets)
-{
-	if (gameData->network.mode == CLIENT) {
-		EventPacket pkt = { .type = PKT_HEARTBEAT };
-		send(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0);
-
-		if (!gameData->network.clientConnected) {
-			EventPacket response;
-			int n = recv(gameData->network.socket, (char*)&response, sizeof(response), 0);
-			if (n > 0 && response.type == PKT_HEARTBEAT)
-				gameData->network.clientConnected = 1;
-		}
-
-		EventPacket eventPkt;
-		int n = recv(gameData->network.socket, (char*)&eventPkt, sizeof(eventPkt), 0);
-		if (n > 0 && eventPkt.type == PKT_START) {
-			startGame(gameData, assets);
-			gameData->currentGamestate = IN_GAME;
-		}
-
-	}
-	else if (gameData->network.mode == HOST) {
-		EventPacket pkt;
-		struct sockaddr_in from;
-		int from_len = sizeof(from);
-		int n = recvfrom(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0,
-			(struct sockaddr*)&from, &from_len);
-		if (n > 0 && pkt.type == PKT_HEARTBEAT && !gameData->network.clientConnected) {
-			gameData->network.clientAddr = from;
-			gameData->network.clientConnected = 1;
-			printf("client connected!\n");
-
-			EventPacket ack = { .type = PKT_HEARTBEAT };
-			sendto(gameData->network.socket, (char*)&ack, sizeof(ack), 0,
-				(struct sockaddr*)&from, sizeof(from));
-		}
-	}
 }
 
 void ShootProjectile(GameData* gameData, Entity* shooter, Assets* assets)
@@ -424,15 +366,14 @@ void ShootProjectile(GameData* gameData, Entity* shooter, Assets* assets)
 	if (shooter->type == PLAYER && gameData->currentPlayerProjectiles < gameData->maxPlayerProjectiles)
 	{
 		type = PLAYER_BULLET;
-		velocity = (Vector2){ 0, -2.0f };
+		velocity = (Vector2){ 0, PLAYER_BULLET_SPEED };
 		gameData->currentPlayerProjectiles++;
-		PlaySound(assets->playerShoot);
-		gameData->soundFlags |= SND_PLAYER_SHOOT;
+		SoundEffect(gameData, assets, SND_PLAYER_SHOOT);
 	}
 	else if (shooter->type == ENEMY)
 	{
 		type = ENEMY_BULLET;
-		velocity = (Vector2){ 0, 2.0f };
+		velocity = (Vector2){ 0, ENEMY_BULLET_SPEED };
 	}
 	else
 		return;
@@ -451,13 +392,98 @@ void KillEntity(GameData* gameData, int index)
 	else gameData->entityCount--;
 }
 
-void GameOverScreen(GameData* gameData)
+void GameOverScreen(GameData* gameData, Assets* assets)
 {
+	if (IsSoundPlaying(assets->battleTheme)) StopSound(assets->battleTheme);
 	BeginDrawing();
 	DrawText("GAME OVER", gameData->config.screenWidth / 2 - MeasureText("GAME OVER", 60) / 2, gameData->config.screenHeight / 2 - 30, 60, WHITE);
 	EndDrawing();
+	PlaySound(assets->gameOver);
 	WaitTime(5.0);
 	return;
+}
+
+// Network handling
+
+void ClientInitialization(GameData* gameData, const char* ip)
+{
+	WSADATA wsa;
+	WSAStartup(MAKEWORD(2, 2), &wsa);
+
+	SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+	struct sockaddr_in addr = { 0 };
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(2112);
+	inet_pton(AF_INET, ip, &addr.sin_addr);
+
+	if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) printf("connect failed: %d\n", WSAGetLastError());
+	else 
+	{
+		u_long mode = 1;
+		ioctlsocket(sock, FIONBIO, &mode);
+		printf("UDP socket ready\n");
+	}
+	gameData->network.socket = sock;
+}
+
+void ServerInitialization(GameData* gameData)
+{
+	WSADATA wsa;
+	WSAStartup(MAKEWORD(2, 2), &wsa);
+
+	SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+	struct sockaddr_in addr = { 0 };
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = INADDR_ANY;
+	addr.sin_port = htons(2112);
+	if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) printf("bind failed: %d\n", WSAGetLastError());
+	else 
+	{
+		u_long mode = 1;
+		ioctlsocket(sock, FIONBIO, &mode);
+		printf("UDP echo server listening on port 2112...\n");
+	}
+	gameData->network.socket = sock;
+	gameData->network.clientConnected = 0;
+}
+
+void LobbyHandler(GameData* gameData, Assets* assets)
+{
+	if (gameData->network.mode == CLIENT) {
+		EventPacket pkt = { .type = PKT_HEARTBEAT };
+		send(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0);
+
+		EventPacket response;
+		int n = recv(gameData->network.socket, (char*)&response, sizeof(response), 0);
+		if (n > 0) 
+		{
+			if (response.type == PKT_HEARTBEAT)
+				gameData->network.clientConnected = 1;
+			else if (response.type == PKT_START) 
+			{
+				gameData->network.clientConnected = 1;
+				startGame(gameData, assets);
+				gameData->currentGamestate = IN_GAME;
+			}
+		}
+
+	}
+	else if (gameData->network.mode == HOST) {
+		EventPacket pkt;
+		struct sockaddr_in from;
+		int from_len = sizeof(from);
+		int n = recvfrom(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0, (struct sockaddr*)&from, &from_len);
+		if (n > 0 && pkt.type == PKT_HEARTBEAT && !gameData->network.clientConnected) 
+		{
+			gameData->network.clientAddr = from;
+			gameData->network.clientConnected = 1;
+			printf("client connected!\n");
+
+			EventPacket ack = { .type = PKT_HEARTBEAT };
+			sendto(gameData->network.socket, (char*)&ack, sizeof(ack), 0,
+				(struct sockaddr*)&from, sizeof(from));
+		}
+	}
 }
 
 void NetworkHandler(GameData* gameData, Assets* assets)
@@ -472,7 +498,9 @@ void NetworkHandler(GameData* gameData, Assets* assets)
 		int from_len = sizeof(from);
 		int n = recvfrom(gameData->network.socket, (char*)&input, sizeof(input), 0,
 			(struct sockaddr*)&from, &from_len);
-		if (n > 0 && input.type == PKT_INPUT) {
+		if (n > 0 && input.type == PKT_INPUT) 
+		{
+			gameData->network.lastPacketTime = GetTime();
 			Entity* p2 = &gameData->entities[1];
 			if (p2->type == PLAYER)
 			{
@@ -483,9 +511,30 @@ void NetworkHandler(GameData* gameData, Assets* assets)
 			}
 		}
 
-		if (n > 0 && input.type == PKT_GAMEOVER) {
-			GameOverScreen(gameData);
-			initializeGameData(gameData, assets);
+		if (n > 0 && input.type == PKT_HEARTBEAT) 
+		{
+			if (!gameData->network.clientConnected) 
+			{  
+				gameData->network.clientAddr = from;
+				gameData->network.clientConnected = 1;
+				gameData->network.lastPacketTime = GetTime();
+				printf("client reconnected!\n");
+				EventPacket pkt = { .type = PKT_START };
+				sendto(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0,
+					(struct sockaddr*)&from, sizeof(from));
+			}
+		}
+
+		if (n > 0 && input.type == PKT_GAMEOVER) 
+		{
+			GameOverScreen(gameData, assets);
+			InitializeGameData(gameData, assets);
+		}
+
+		if (gameData->network.clientConnected && GetTime() - gameData->network.lastPacketTime > DISCONNECT_TIMEOUT)
+		{
+			printf("Client timed out\n");
+			gameData->network.clientConnected = 0;
 		}
 	}
 	else if (gameData->network.mode == CLIENT)
@@ -501,6 +550,7 @@ void NetworkHandler(GameData* gameData, Assets* assets)
 		StatePacket statePacket;
 		int n = recv(gameData->network.socket, (char*)&statePacket, sizeof(statePacket), 0);
 		if (n > 0 && statePacket.type == PKT_STATE) {
+			gameData->network.lastPacketTime = GetTime();
 			gameData->score = statePacket.score;
 			gameData->entityCount = statePacket.entityCount;
 			for (int i = 0; i < statePacket.entityCount; i++) {
@@ -518,8 +568,15 @@ void NetworkHandler(GameData* gameData, Assets* assets)
 
 		if (n > 0 && statePacket.type == PKT_GAMEOVER)
 		{
-			GameOverScreen(gameData);
-			initializeGameData(gameData, assets);
+			GameOverScreen(gameData, assets);
+			InitializeGameData(gameData, assets);
+		}
+
+		if (gameData->network.clientConnected && GetTime() - gameData->network.lastPacketTime > DISCONNECT_TIMEOUT)
+		{
+			printf("Host timed out\n");
+			gameData->network.clientConnected = 0;
+			InitializeGameData(gameData, assets);
 		}
 	}
 }
@@ -554,6 +611,9 @@ void BroadcastState(GameData* gameData)
 			else
 				sprite = gameData->entities[i].data.enemy.deathAnimation.frames[gameData->entities[i].data.enemy.deathAnimation.currentFrame];
 			break;
+		default:
+			sprite = gameData->entities[i].baseSprite;
+			break;
 		}
 		pkt.entities[i].sprite = sprite;
 		
@@ -569,7 +629,6 @@ void BroadcastState(GameData* gameData)
 void Update(GameData* gameData, int currentTick, Assets* assets)
 {
 	
-
 	if (IsSoundPlaying(assets->battleTheme) == false)
 	{
 		PlaySound(assets->battleTheme);
@@ -685,8 +744,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 							if (j == gameData->entityCount - 1) j = i;
 							KillEntity(gameData, i);
 							gameData->entities[j].state = DYING;
-							PlaySound(assets->hitEnemy);
-							gameData->soundFlags |= SND_HIT_ENEMY;
+							SoundEffect(gameData, assets, SND_HIT_ENEMY);
 							gameData->currentPlayerProjectiles--;
 
 							break;
@@ -719,8 +777,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 						{
 							if (CheckCollisionCircles(gameData->entities[i].position, gameData->entities[i].size * SPRITE_TO_HITBOX_SCALE, gameData->entities[j].position, gameData->entities[j].size * SPRITE_TO_HITBOX_SCALE))
 							{
-								PlaySound(assets->fighterLoss);
-								gameData->soundFlags |= SND_FIGHTER_LOSS;
+								SoundEffect(gameData, assets, SND_FIGHTER_LOSS);
 								gameData->entities[i].state = DYING;
 
 							}
@@ -755,13 +812,13 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 									(struct sockaddr*)&gameData->network.clientAddr, sizeof(gameData->network.clientAddr));
 							}
 
-							GameOverScreen(gameData);
-							initializeGameData(gameData, assets);
-							
+							GameOverScreen(gameData, assets);
+							InitializeGameData(gameData, assets);
+							return;
 						}
 						else
 						{
-							KillEntity(gameData, i); // remove dead player but keep going
+							KillEntity(gameData, i);
 						}
 					}
 				}
@@ -800,6 +857,15 @@ void Draw(RenderTexture2D target, GameData* gameData, Assets* assets)
 
 		DrawText("HOST", GAME_WIDTH / 2 - MeasureText("HOST", 16) / 2, GAME_HEIGHT / 2 - 60, 16, BLUE);
 		DrawText("JOIN", GAME_WIDTH / 2 - MeasureText("JOIN", 16) / 2, GAME_HEIGHT / 2 + 15, 16, BLUE);
+	}
+
+	if (gameData->currentGamestate == IP_INPUT)
+	{
+		Rectangle inputBox = (Rectangle){ GAME_WIDTH / 2 - 75, GAME_HEIGHT / 2 - 12, 150, 25 };
+		DrawRectangleRec(inputBox, WHITE);
+		DrawText(gameData->network.ip, GAME_WIDTH / 2 - MeasureText(gameData->network.ip, 12) / 2, GAME_HEIGHT / 2 - 6, 12, BLACK);
+		DrawText("ENTER IP", GAME_WIDTH / 2 - MeasureText("ENTER IP", 10) / 2, GAME_HEIGHT / 2 - 30, 10, WHITE);
+		DrawText("PRESS ENTER TO CONNECT", GAME_WIDTH / 2 - MeasureText("PRESS ENTER TO CONNECT", 8) / 2, GAME_HEIGHT / 2 + 20, 8, WHITE);
 	}
 
 	if (gameData->currentGamestate == MULTIPLAYER_LOBBY)
@@ -920,7 +986,28 @@ void HandleInput(GameData* gameData, Assets* assets)
 		}
 		else if (CheckCollisionPointRec(gameMousePosition, joinButton) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
 		{
-			ClientInitialization(gameData);
+			gameData->currentGamestate = IP_INPUT;
+			gameData->network.mode = CLIENT;
+		}
+	}
+
+	else if (gameData->currentGamestate == IP_INPUT)
+	{
+		// Type characters
+		int c;
+		while ((c = GetCharPressed()) != 0) {
+			if ((c >= '0' && c <= '9' || c == '.') && gameData->network.ipLength < 15) {
+				gameData->network.ip[gameData->network.ipLength++] = (char)c;
+				gameData->network.ip[gameData->network.ipLength] = '\0';
+			}
+		}
+		// Backspace
+		if (IsKeyPressed(KEY_BACKSPACE) && gameData->network.ipLength > 0) {
+			gameData->network.ip[--gameData->network.ipLength] = '\0';
+		}
+		// Confirm
+		if (IsKeyPressed(KEY_ENTER) && gameData->network.ipLength > 0) {
+			ClientInitialization(gameData, gameData->network.ip);
 			gameData->currentGamestate = MULTIPLAYER_LOBBY;
 			gameData->network.mode = CLIENT;
 		}
@@ -985,7 +1072,7 @@ int main(void)
 
 	loadAssets(assets);
 
-	initializeGameData(gameData, assets);
+	InitializeGameData(gameData, assets);
 
 	while (!WindowShouldClose())    
 	{
@@ -999,7 +1086,7 @@ int main(void)
 		if (gameData->currentGamestate == IN_GAME)
 		{
 			NetworkHandler(gameData, assets);
-			if (GetTime() - lastTick >= TICK_DURATION)
+			if (GetTime() - lastTick >= TICK_DURATION && gameData->currentGamestate == IN_GAME)
 			{
 				currentTick++;
 				lastTick = GetTime();
