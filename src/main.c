@@ -56,6 +56,8 @@
 #define TICK_DURATION 0.01f //In seconds
 #define DISCONNECT_TIMEOUT 5.0 //In seconds
 #define ENTITIES_PER_PACKET 20
+#define MAX_PENDING_EVENTS 16
+#define MAX_STATE_PACKETS 10
 
 #define BASE_PLAYER_SPRITE (Rectangle){1, 70, 16, 16}
 #define BASE_BULLET_SPRITE (Rectangle){200, 97, 1, 2}
@@ -120,14 +122,18 @@ typedef struct EventPacket {
 typedef struct InputPacket {
 	u8 type;							// 1 byte
 	InputFlags flags;					// 4 bytes
-} InputPacket;							// Total: 5 bytes
+	int lastReceivedEventID;			// 4 bytes
+} InputPacket;							// Total: 9 bytes
 
 typedef struct StatePacket {
 	u8    type;							// 1 byte
 	u8    entityCount;					// 1 byte
-	u8    soundFlags;					// 1 byte
+	u8	  soundFlags;					// 1 byte
+	u8    totalPackets;					// 1 byte
 	int score;							// 4 bytes
 	int entityIndex;					// 4 bytes	
+	int eventID;						// 4 bytes
+	int tick;							// 4 bytes
 	struct {
 		float x, y;						// 8 bytes
 		u8    state;					// 1 byte
@@ -135,7 +141,13 @@ typedef struct StatePacket {
 		Rectangle    sprite;			// 16 bytes
 	} entities[ENTITIES_PER_PACKET];	// 26 bytes * 20 entities = 520 bytes
 	double timestamp;					// 8 bytes
-} StatePacket;							// Total: 558 bytes
+} StatePacket;							// Total: 574 bytes
+
+typedef struct PendingEvent {
+	u8 soundFlags;
+	int id;
+	int retries;
+} PendingEvent;
 
 typedef struct Animation
 {
@@ -240,6 +252,13 @@ typedef struct NetworkInfo
 	double lastPacketTime;
 	char ip[16];
 	int ipLength;
+	PendingEvent pendingEvents[MAX_PENDING_EVENTS];
+	int pendingCount;
+	int nextEventID;
+	int lastPlayedEventID;
+	StatePacket bufferedPartialStates[MAX_STATE_PACKETS];
+	int bufferedCount;
+	int bufferedTick;
 } NetworkInfo;
 
 typedef struct GameData
@@ -255,7 +274,6 @@ typedef struct GameData
 	u8 maxDivingEnemies;
 	u8 currentDivingEnemies;
 	u8 currentGamestate;
-	u8 soundFlags;
 	u8 gameOver;
 } GameData;
 
@@ -283,6 +301,7 @@ void Update(GameData* gameData, int currentTick, Assets* assets);
 void Draw(RenderTexture2D target, GameData* gameData, Assets* assets);
 void HandleInput(GameData* gameData, Assets* assets);
 void CleanUp(GameData* gameData, Assets* assets);
+void EnqueueSoundEvent(GameData* gameData, u8 soundFlags);
 
 // DFS Ordering
 
@@ -339,13 +358,15 @@ void InitializeGameData(GameData* gameData, Assets* assets)
 	gameData->currentDivingEnemies = 0;
 	gameData->maxDivingEnemies = MAX_DIVING_ENEMIES;
 	gameData->powerupTicks = 0;
-	gameData->soundFlags = 0;
 	gameData->network.socket = INVALID_SOCKET;
 	gameData->network.clientConnected = 0;
 	gameData->network.lastPacketTime = 0;
 	gameData->network.ip[0] = '\0';
 	gameData->network.ipLength = 0;
 	gameData->gameOver = 0;
+	gameData->network.bufferedCount = 0;
+	gameData->network.bufferedTick = -1;
+	gameData->network.lastPlayedEventID = -1;
 
 }
 
@@ -775,18 +796,27 @@ void SoundEffect(GameData* gameData, Assets* assets, SoundFlags flag)
 	{
 	case SND_PLAYER_SHOOT:
 		PlaySound(assets->playerShoot);
-		gameData->soundFlags |= SND_PLAYER_SHOOT;
+		EnqueueSoundEvent(gameData, SND_PLAYER_SHOOT);
 		break;
 	case SND_FIGHTER_LOSS:
 		PlaySound(assets->fighterLoss);
-		gameData->soundFlags |= SND_FIGHTER_LOSS;
+		EnqueueSoundEvent(gameData, SND_FIGHTER_LOSS);
 		break;
 	case SND_HIT_ENEMY:
 		PlaySound(assets->hitEnemy);
-		gameData->soundFlags |= SND_HIT_ENEMY;
+		EnqueueSoundEvent(gameData, SND_HIT_ENEMY);
 		break;
 	}
 
+}
+
+void EnqueueSoundEvent(GameData* gameData, u8 soundFlags)
+{
+	if (gameData->network.pendingCount >= MAX_PENDING_EVENTS) return;
+	PendingEvent* event = &gameData->network.pendingEvents[gameData->network.pendingCount++];
+	event->soundFlags = soundFlags;
+	event->id = gameData->network.nextEventID++;
+	event->retries = 0;
 }
 
 void KillEntity(GameData* gameData, int index)
@@ -797,7 +827,7 @@ void KillEntity(GameData* gameData, int index)
 
 }
 
-void BroadcastState(GameData* gameData)
+void BroadcastState(GameData* gameData, int currentTick)
 {
 	if (!gameData->network.clientConnected) return;
 
@@ -813,6 +843,9 @@ void BroadcastState(GameData* gameData)
 	pkt.score = gameData->score;
 	pkt.entityCount = gameData->entityCount;
 	pkt.timestamp = GetTime();
+	int totalPackets = gameData->entityCount / ENTITIES_PER_PACKET + 1;
+	pkt.totalPackets = totalPackets;
+	pkt.tick = currentTick;
 
 	for (int j = 0; j < gameData->entityCount / ENTITIES_PER_PACKET + 1; j++)
 	{
@@ -848,13 +881,25 @@ void BroadcastState(GameData* gameData)
 
 		}
 
-		pkt.soundFlags = gameData->soundFlags;
-
-		gameData->soundFlags = 0;
+		if (gameData->network.pendingCount > 0)
+		{
+			PendingEvent* event = &gameData->network.pendingEvents[0];
+			pkt.soundFlags = event->soundFlags;
+			pkt.eventID = event->id;
+			event->retries++;
+			if (event->retries > 10) memmove(&gameData->network.pendingEvents, &gameData->network.pendingEvents + 1, (--gameData->network.pendingCount) * sizeof(PendingEvent));
+		}
+		else
+		{
+			pkt.soundFlags = 0;
+			pkt.eventID = -1;
+		}
 
 		sendto(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0,
 			(struct sockaddr*)&gameData->network.clientAddr, sizeof(gameData->network.clientAddr));
 	}
+
+	
 }
 
 void NetworkHandler(GameData* gameData, Assets* assets)
@@ -915,32 +960,46 @@ void NetworkHandler(GameData* gameData, Assets* assets)
 		if (IsKeyDown(KEY_LEFT))        input.flags |= (1 << 0);
 		if (IsKeyDown(KEY_RIGHT))        input.flags |= (1 << 1);
 		if (IsKeyPressed(KEY_LEFT_CONTROL)) input.flags |= (1 << 2);
-		send(gameData->network.socket, (char*)&input, sizeof(input), 0);
 
 		// Receive state updates from host
 		StatePacket statePacket;
 		int n;
 		while ((n = recv(gameData->network.socket, (char*)&statePacket, sizeof(statePacket), 0)) > 0)
 		{
-			if (statePacket.soundFlags != 0) printf("client received type=%d soundFlags=%d\n", statePacket.type, statePacket.soundFlags);
-			if (statePacket.type == PKT_STATE && statePacket.timestamp >= gameData->network.lastPacketTime) {
-				gameData->network.lastPacketTime = statePacket.timestamp;
-				gameData->score = statePacket.score;
-				gameData->entityCount = statePacket.entityCount;
-				for (int i = 0; i < ENTITIES_PER_PACKET; i++)
+			if (statePacket.tick != gameData->network.bufferedTick) {
+				gameData->network.bufferedCount = 0;
+				gameData->network.bufferedTick = statePacket.tick;
+			}
+
+			if (gameData->network.bufferedCount < MAX_STATE_PACKETS) gameData->network.bufferedPartialStates[gameData->network.bufferedCount++] = statePacket;
+
+			if (gameData->network.bufferedCount == statePacket.totalPackets)
+			{
+				for (int packet = 0; packet < gameData->network.bufferedCount; packet++)
 				{
-					int id = i + statePacket.entityIndex;
-					if (id >= statePacket.entityCount) break;
-					gameData->entities[id].position.x = statePacket.entities[i].x;
-					gameData->entities[id].position.y = statePacket.entities[i].y;
-					gameData->entities[id].state = statePacket.entities[i].state;
-					gameData->entities[id].size = statePacket.entities[i].size;
-					gameData->entities[id].baseSprite = statePacket.entities[i].sprite; // animation frame for Draw()
+					StatePacket* statePacket = &gameData->network.bufferedPartialStates[packet];
+					gameData->score = statePacket->score;
+					gameData->entityCount = statePacket->entityCount;
+					gameData->network.lastPacketTime = GetTime();
+					for (int i = 0; i < ENTITIES_PER_PACKET; i++) {
+						int id = i + statePacket->entityIndex;
+						if (id >= statePacket->entityCount) break;
+						gameData->entities[id].position.x = statePacket->entities[i].x;
+						gameData->entities[id].position.y = statePacket->entities[i].y;
+						gameData->entities[id].state = statePacket->entities[i].state;
+						gameData->entities[id].size = statePacket->entities[i].size;
+						gameData->entities[id].baseSprite = statePacket->entities[i].sprite;
+					}
+					// Sound only from the packet that carries the event
+					if (statePacket->eventID >= 0 && statePacket->eventID > gameData->network.lastPlayedEventID) {
+						gameData->network.lastPlayedEventID = statePacket->eventID;
+						if (statePacket->soundFlags & SND_PLAYER_SHOOT) PlaySound(assets->playerShoot);
+						if (statePacket->soundFlags & SND_HIT_ENEMY)    PlaySound(assets->hitEnemy);
+						if (statePacket->soundFlags & SND_FIGHTER_LOSS)  PlaySound(assets->fighterLoss);
+					}
 				}
-				if (statePacket.soundFlags & SND_PLAYER_SHOOT) PlaySound(assets->playerShoot);
-				if (statePacket.soundFlags & SND_HIT_ENEMY)    PlaySound(assets->hitEnemy);
-				if (statePacket.soundFlags & SND_FIGHTER_LOSS)
-					PlaySound(assets->fighterLoss);
+				// Ack the event
+				input.lastReceivedEventID = statePacket.eventID;
 			}
 
 			if (statePacket.type == PKT_GAMEOVER)
@@ -956,6 +1015,7 @@ void NetworkHandler(GameData* gameData, Assets* assets)
 				InitializeGameData(gameData, assets);
 			}
 		}
+		send(gameData->network.socket, (char*)&input, sizeof(input), 0);
 	}
 }
 
@@ -1152,7 +1212,7 @@ int main(void)
 					currentTick++;
 					lastTick = GetTime();
 					Update(gameData, currentTick, assets);
-					if (gameData->network.mode == HOST) BroadcastState(gameData);
+					if (gameData->network.mode == HOST) BroadcastState(gameData, currentTick);
 				}
 				NetworkHandler(gameData, assets);
 				break;
