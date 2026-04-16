@@ -83,6 +83,12 @@ typedef enum NetcodeMode
 	NON_BLOCKING
 } NetcodeMode;
 
+typedef enum GameMode
+{
+	SINGLEPLAYER,
+	COOP
+} GameMode;
+
 typedef enum PacketType
 {
 	PKT_HEARTBEAT,
@@ -95,12 +101,20 @@ typedef enum PacketType
 typedef enum GameState
 {
 	MAIN_MENU,
+	SINGLEPLAYER_MENU,
 	MULTIPLAYER_MENU,
 	IP_INPUT,
 	MULTIPLAYER_LOBBY,
 	IN_GAME,
 	GAME_OVER
 } GameState;
+
+typedef enum AIAllyState
+{
+	MOVING_LEFT,
+	MOVING_RIGHT,
+	STILL
+} AIAllyState;
 
 typedef enum InputFlags
 {
@@ -211,11 +225,13 @@ typedef union EntityData
 	{
 		int lives;
 		Animation deathAnimation;
+		u8 currentProjectiles;
 	} player;
 	EnemyData enemy;
 	struct
 	{
 		ProjectileType type;
+		u8 ownerID;
 	} projectile;
 } EntityData;
 
@@ -241,6 +257,7 @@ typedef struct Entity
 	EntityData data;
 	Rectangle baseSprite;
 	int size;
+	u8 ID;
 } Entity;
 
 typedef struct NetworkInfo
@@ -270,11 +287,12 @@ typedef struct GameData
 	int score;
 	int powerupTicks;
 	u8 maxPlayerProjectiles;
-	u8 currentPlayerProjectiles;
 	u8 maxDivingEnemies;
 	u8 currentDivingEnemies;
 	u8 currentGamestate;
 	u8 gameOver;
+	u8 gameMode;
+	u8 AIallyState;
 } GameData;
 
 // Function declarations
@@ -296,6 +314,7 @@ void BroadcastState(GameData* gameData);
 static inline void UpdateEnemy(GameData* gameData, Assets* assets, int id, int currentTick);
 static inline void UpdateProjectile(GameData* gameData, Assets* assets, int id);
 static inline void UpdatePlayer(GameData* gameData, Assets* assets, int id, int currentTick);
+static inline void UpdateAllyAI(GameData* gameData, Assets* assets);
 
 void Update(GameData* gameData, int currentTick, Assets* assets);
 void Draw(RenderTexture2D target, GameData* gameData, Assets* assets);
@@ -354,7 +373,6 @@ void InitializeGameData(GameData* gameData, Assets* assets)
 	gameData->entityCount = 0;
 	gameData->score = 0;
 	gameData->maxPlayerProjectiles = MAX_PLAYER_PROJECTILES;
-	gameData->currentPlayerProjectiles = 0;
 	gameData->currentDivingEnemies = 0;
 	gameData->maxDivingEnemies = MAX_DIVING_ENEMIES;
 	gameData->powerupTicks = 0;
@@ -367,6 +385,9 @@ void InitializeGameData(GameData* gameData, Assets* assets)
 	gameData->network.bufferedCount = 0;
 	gameData->network.bufferedTick = -1;
 	gameData->network.lastPlayedEventID = -1;
+	gameData->network.mode = NONE;
+	gameData->gameMode = SINGLEPLAYER;
+	gameData->AIallyState = STILL;
 
 }
 
@@ -380,12 +401,30 @@ void HandleInput(GameData* gameData, Assets* assets)
 		Rectangle multiplayerButton = (Rectangle){ GAME_WIDTH / 2 - 75, GAME_HEIGHT / 2, 150, 50 };
 		if (CheckCollisionPointRec(gameMousePosition, singlePlayerButton) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
 		{
-			gameData->currentGamestate = IN_GAME;
-			startGame(gameData, assets);
+			gameData->currentGamestate = SINGLEPLAYER_MENU;
 		}
 		else if (CheckCollisionPointRec(gameMousePosition, multiplayerButton) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
 		{
 			gameData->currentGamestate = MULTIPLAYER_MENU;
+		}
+	}
+
+	else if (gameData->currentGamestate == SINGLEPLAYER_MENU)
+	{
+		Vector2 mousePosition = GetMousePosition();
+		Vector2 gameMousePosition = (Vector2){ mousePosition.x / GAME_SCALE_FACTOR, mousePosition.y / GAME_SCALE_FACTOR };
+		Rectangle soloButton = (Rectangle){ GAME_WIDTH / 2 - 75, GAME_HEIGHT / 2 - 75, 150, 50 };
+		Rectangle coOpButton = (Rectangle){ GAME_WIDTH / 2 - 75, GAME_HEIGHT / 2, 150, 50 };
+		if (CheckCollisionPointRec(gameMousePosition, soloButton) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+		{
+			gameData->currentGamestate = IN_GAME;
+			startGame(gameData, assets);
+		}
+		else if (CheckCollisionPointRec(gameMousePosition, coOpButton) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+		{
+			gameData->currentGamestate = IN_GAME;
+			gameData->gameMode = COOP;
+			startGame(gameData, assets);
 		}
 	}
 
@@ -441,6 +480,7 @@ void HandleInput(GameData* gameData, Assets* assets)
 			{
 				startGame(gameData, assets);
 				gameData->currentGamestate = IN_GAME;
+				gameData->gameMode = COOP;
 				EventPacket pkt = { .type = PKT_START };
 				sendto(gameData->network.socket, (char*)&pkt, sizeof(pkt), 0, (struct sockaddr*)&gameData->network.clientAddr, sizeof(gameData->network.clientAddr));
 			}
@@ -506,13 +546,15 @@ void ShootProjectile(GameData* gameData, Entity* shooter, Assets* assets)
 	ProjectileType type = NONE;
 	Vector2 velocity = { 0, 0 };
 	Vector2 spawnPos = { shooter->position.x, shooter->position.y };
-	if (shooter->type == PLAYER && gameData->currentPlayerProjectiles < gameData->maxPlayerProjectiles)
+	u8 ownerID = shooter->ID;
+	if (shooter->type == PLAYER && shooter->data.player.currentProjectiles < gameData->maxPlayerProjectiles)
 	{
 		type = PLAYER_BULLET;
 		velocity = (Vector2){ 0, PLAYER_BULLET_SPEED };
-		gameData->currentPlayerProjectiles++;
+		shooter->data.player.currentProjectiles++;
 		SoundEffect(gameData, assets, SND_PLAYER_SHOOT);
 		spawnPos = (Vector2){ shooter->position.x, shooter->position.y - 10.0f };
+		
 	}
 	else if (shooter->type == ENEMY)
 	{
@@ -522,7 +564,7 @@ void ShootProjectile(GameData* gameData, Entity* shooter, Assets* assets)
 	else
 		return;
 
-	gameData->entities[gameData->entityCount] = (Entity){ .type = PROJECTILE, .state = ALIVE, .position = spawnPos, .velocity = velocity, .size = 2, .baseSprite = BASE_BULLET_SPRITE, .data.projectile.type = type };
+	gameData->entities[gameData->entityCount] = (Entity){ .type = PROJECTILE, .state = ALIVE, .position = spawnPos, .velocity = velocity, .size = 2, .baseSprite = BASE_BULLET_SPRITE, .data.projectile.type = type, .data.projectile.ownerID = ownerID };
 	gameData->entityCount++;
 }
 
@@ -542,6 +584,7 @@ void LobbyHandler(GameData* gameData, Assets* assets)
 			case PKT_START:
 				startGame(gameData, assets);
 				gameData->currentGamestate = IN_GAME;
+				gameData->gameMode = COOP;
 			case PKT_HEARTBEAT:
 				gameData->network.clientConnected = 1;
 			}
@@ -576,17 +619,19 @@ void startGame(GameData* gameData, Assets* assets)
 
 	for (int i = 0; i < MAX_ENTITIES; i++)
 	{
-		gameData->entities[i] = (Entity){ .type = NONE, .position = {0, 0}, .velocity = {0, 0}, .size = 0 };
+		gameData->entities[i] = (Entity){ .type = NONE, .position = {0, 0}, .velocity = {0, 0}, .size = 0, .ID = 0 };
 	}
 
-	gameData->entities[0] = (Entity){ .type = PLAYER, .state = ALIVE, .position = (Vector2){gameData->network.clientConnected == 1 ? 92.0f : 112.0f, 240}, .size = 16, .baseSprite = BASE_PLAYER_SPRITE };
+	gameData->entities[0] = (Entity){ .type = PLAYER, .state = ALIVE, .position = (Vector2){gameData->gameMode == COOP ? 92.0f : 112.0f, 240}, .size = 16, .baseSprite = BASE_PLAYER_SPRITE };
 	gameData->entities[0].data.player.deathAnimation = assets->playerDeath;
+	gameData->entities[0].data.player.currentProjectiles = 0;
 	gameData->entityCount++;
 
-	if (gameData->network.clientConnected == 1)
+	if (gameData->gameMode == COOP)
 	{
-		gameData->entities[1] = (Entity){ .type = PLAYER, .state = ALIVE, .position = (Vector2){132, 240}, .size = 16, .baseSprite = BASE_PLAYER_SPRITE };
+		gameData->entities[1] = (Entity){ .type = PLAYER, .state = ALIVE, .position = (Vector2){132, 240}, .size = 16, .baseSprite = BASE_PLAYER_SPRITE, .ID = 1 };
 		gameData->entities[1].data.player.deathAnimation = assets->playerDeath;
+		gameData->entities[0].data.player.currentProjectiles = 0;
 		gameData->entityCount++;
 	}
 
@@ -594,7 +639,7 @@ void startGame(GameData* gameData, Assets* assets)
 	{
 		for (int j = 0; j < COLUMNS_OF_BLUE_ENEMIES; j++)
 		{
-			gameData->entities[gameData->entityCount] = (Entity){ .type = ENEMY, .state = ALIVE, .position = (Vector2){GAME_WIDTH / 2.0f - COLUMNS_OF_BLUE_ENEMIES * ENEMY_SPACING / 2.0f + j * ENEMY_SPACING, BLUE_ENEMY_STARTING_Y + i * ENEMY_SPACING}, .velocity = (Vector2){0.1f, 0}, .size = ENEMY_SIZE, .baseSprite = BASE_BLUE_ENEMY_SPRITE };
+			gameData->entities[gameData->entityCount] = (Entity){ .type = ENEMY, .state = ALIVE, .position = (Vector2){GAME_WIDTH / 2.0f - COLUMNS_OF_BLUE_ENEMIES * ENEMY_SPACING / 2.0f + j * ENEMY_SPACING, BLUE_ENEMY_STARTING_Y + i * ENEMY_SPACING}, .velocity = (Vector2){0.1f, 0}, .size = ENEMY_SIZE, .baseSprite = BASE_BLUE_ENEMY_SPRITE, .ID = (u8)gameData->entityCount };
 			gameData->entities[gameData->entityCount].data.enemy = (EnemyData){ .type = BLUE_ENEMY, .behaviour = IN_FORMATION, .movementAnimation = assets->blueEnemyMovement, .deathAnimation = assets->enemyDeath };
 			gameData->entityCount++;
 		}
@@ -602,7 +647,7 @@ void startGame(GameData* gameData, Assets* assets)
 
 	for (int j = 0; j < COLUMNS_OF_PURPLE_ENEMIES; j++)
 	{
-		gameData->entities[gameData->entityCount] = (Entity){ .type = ENEMY, .state = ALIVE, .position = (Vector2){GAME_WIDTH / 2.0f - COLUMNS_OF_PURPLE_ENEMIES * ENEMY_SPACING / 2.0f + j * ENEMY_SPACING, PURPLE_ENEMY_STARTING_Y}, .velocity = (Vector2){0.1f, 0}, .size = ENEMY_SIZE, .baseSprite = BASE_PURPLE_ENEMY_SPRITE };
+		gameData->entities[gameData->entityCount] = (Entity){ .type = ENEMY, .state = ALIVE, .position = (Vector2){GAME_WIDTH / 2.0f - COLUMNS_OF_PURPLE_ENEMIES * ENEMY_SPACING / 2.0f + j * ENEMY_SPACING, PURPLE_ENEMY_STARTING_Y}, .velocity = (Vector2){0.1f, 0}, .size = ENEMY_SIZE, .baseSprite = BASE_PURPLE_ENEMY_SPRITE, .ID = (u8)gameData->entityCount };
 		gameData->entities[gameData->entityCount].data.enemy = (EnemyData){ .type = PURPLE_ENEMY, .behaviour = IN_FORMATION, .movementAnimation = assets->purpleEnemyMovement, .deathAnimation = assets->enemyDeath };
 		gameData->entityCount++;
 	}
@@ -625,6 +670,12 @@ void Update(GameData* gameData, int currentTick, Assets* assets)
 		case PLAYER: UpdatePlayer(gameData, assets, i, currentTick);	break;
 		}
 	}
+
+	if (gameData->gameMode == COOP && gameData->entities[1].type == PLAYER && gameData->network.mode == NONE)
+	{
+		UpdateAllyAI(gameData, assets);
+	}
+	
 }
 
 static inline void UpdateEnemy(GameData* gameData, Assets* assets, int id, int currentTick)
@@ -697,7 +748,8 @@ static inline void UpdateProjectile(GameData* gameData, Assets* assets, int id)
 	{
 		if (gameData->entities[id].data.projectile.type == PLAYER_BULLET)
 		{
-			gameData->currentPlayerProjectiles--;
+			u8 ownerID = gameData->entities[id].data.projectile.ownerID;
+			gameData->entities[ownerID].data.player.currentProjectiles--;
 		}
 		KillEntity(gameData, id);
 		return;
@@ -726,11 +778,13 @@ static inline void UpdateProjectile(GameData* gameData, Assets* assets, int id)
 						gameData->score += BLUE_ENEMY_SCORE;
 						break;
 					}
+					u8 ownerID = gameData->entities[id].data.projectile.ownerID;
+					gameData->entities[ownerID].data.player.currentProjectiles--;
 					if (j == gameData->entityCount - 1) j = id;
 					KillEntity(gameData, id);
 					gameData->entities[j].state = DYING;
 					SoundEffect(gameData, assets, SND_HIT_ENEMY);
-					gameData->currentPlayerProjectiles--;
+					
 					return;
 				}
 			}
@@ -788,6 +842,29 @@ static inline void UpdatePlayer(GameData* gameData, Assets* assets, int id, int 
 		}
 	}
 
+}
+
+static inline void UpdateAllyAI(GameData* gameData, Assets* assets)
+{
+	int actionChance = rand() % 10000;
+	switch (gameData->AIallyState)
+	{
+	case STILL:
+		ShootProjectile(gameData, &gameData->entities[1], assets);
+		if (actionChance < 4000) gameData->AIallyState = MOVING_LEFT;
+		if (actionChance > 6000) gameData->AIallyState = MOVING_RIGHT;
+		break;
+	case MOVING_LEFT:
+		gameData->entities[1].velocity = (Vector2){ -1.0f, 0 };
+		if (gameData->entities[1].position.x < 0.0f || actionChance > 9900) gameData->AIallyState = MOVING_RIGHT;
+		if (actionChance < 100) gameData->AIallyState = STILL;
+		break;
+	case MOVING_RIGHT:
+		gameData->entities[1].velocity = (Vector2){ 1.0f, 0 };
+		if (gameData->entities[1].position.x > GAME_WIDTH || actionChance > 9900) gameData->AIallyState = MOVING_LEFT;
+		if (actionChance < 100) gameData->AIallyState = STILL;
+		break;
+	}
 }
 
 void SoundEffect(GameData* gameData, Assets* assets, SoundFlags flag)
@@ -1046,6 +1123,18 @@ void Draw(RenderTexture2D target, GameData* gameData, Assets* assets)
 		DrawText("SINGLEPLAYER", GAME_WIDTH / 2 - MeasureText("SINGLEPLAYER", 16) / 2, GAME_HEIGHT / 2 - 60, 16, BLUE);
 		DrawText("MULTIPLAYER", GAME_WIDTH / 2 - MeasureText("MULTIPLAYER", 16) / 2, GAME_HEIGHT / 2 + 15, 16, BLUE);
 
+	}
+
+	if (gameData->currentGamestate == SINGLEPLAYER_MENU)
+	{
+		Rectangle hostButton = (Rectangle){ GAME_WIDTH / 2 - 75, GAME_HEIGHT / 2 - 75, 150, 50 };
+		Rectangle joinButton = (Rectangle){ GAME_WIDTH / 2 - 75, GAME_HEIGHT / 2, 150, 50 };
+
+		DrawRectangleRec(hostButton, WHITE);
+		DrawRectangleRec(joinButton, WHITE);
+
+		DrawText("SOLO", GAME_WIDTH / 2 - MeasureText("SOLO", 16) / 2, GAME_HEIGHT / 2 - 60, 16, BLUE);
+		DrawText("CO-OP", GAME_WIDTH / 2 - MeasureText("CO-OP", 16) / 2, GAME_HEIGHT / 2 + 15, 16, BLUE);
 	}
 
 	if (gameData->currentGamestate == MULTIPLAYER_MENU)
